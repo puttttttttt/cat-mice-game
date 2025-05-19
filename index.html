@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Catch the Mouse!</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Press Start 2P', cursive;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #3498db; /* Cheerful blue background */
+            color: #fff;
+            margin: 0;
+            overflow: hidden; /* Prevent scrollbars if content overflows slightly */
+        }
+        .game-container {
+            background-color: #2c3e50; /* Darker container background */
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+            text-align: center;
+            width: 90%;
+            max-width: 600px;
+        }
+        canvas {
+            background-color: #27ae60; /* Grass green */
+            border-radius: 10px;
+            cursor: crosshair;
+            display: block; /* Remove extra space below canvas */
+            margin: 0 auto; /* Center canvas */
+            max-width: 100%;
+        }
+        button {
+            font-family: 'Press Start 2P', cursive;
+            background-color: #e67e22; /* Orange buttons */
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.3s, transform 0.1s;
+            margin: 10px 5px;
+            box-shadow: 0 4px #d35400; /* Button shadow for 3D effect */
+        }
+        button:hover {
+            background-color: #f39c12; /* Lighter orange on hover */
+        }
+        button:active {
+            transform: translateY(2px);
+            box-shadow: 0 2px #d35400;
+        }
+        .screen {
+            display: none; /* Hide screens by default */
+        }
+        .screen.active {
+            display: block;
+        }
+        #score-display {
+            font-size: 1.5rem;
+            margin: 15px 0;
+            color: #f1c40f; /* Gold color for score */
+        }
+        h1, h2 {
+            color: #ecf0f1; /* Light text color for titles */
+        }
+        p {
+            font-size: 1.1rem;
+        }
+
+        /* Simple grass texture using pseudo-elements on canvas container */
+        .canvas-wrapper {
+            position: relative;
+            display: inline-block; /* To wrap the canvas tightly */
+            width: 100%;
+            max-width: 500px; /* Max width for the canvas area */
+            margin: 0 auto;
+        }
+
+        .canvas-wrapper::before, .canvas-wrapper::after {
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none; /* Allow clicks to pass through to canvas */
+            border-radius: 10px;
+        }
+
+        /* Adding some subtle texture to the grass */
+        .canvas-wrapper::before {
+            background: repeating-linear-gradient(
+                45deg,
+                rgba(0,0,0,0.05),
+                rgba(0,0,0,0.05) 5px,
+                transparent 5px,
+                transparent 10px
+            );
+        }
+
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <div id="intro-screen" class="screen active">
+            <h1>Catch the Mouse!</h1>
+            <p class="my-4">Your cat's favorite game!</p>
+            <button id="start-button">Start Game</button>
+        </div>
+
+        <div id="game-screen" class="screen">
+            <div id="score-display">Score: 0</div>
+            <div class="canvas-wrapper">
+                <canvas id="game-canvas" width="500" height="350"></canvas>
+            </div>
+            <button id="stop-button" class="mt-4">Stop Game</button>
+        </div>
+
+        <div id="score-screen" class="screen">
+            <h2>Game Over!</h2>
+            <p id="final-score" class="my-4">Your score: 0</p>
+            <button id="retry-button">Retry</button>
+        </div>
+    </div>
+
+    <script>
+        // --- DOM Elements ---
+        const introScreen = document.getElementById('intro-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const scoreScreen = document.getElementById('score-screen');
+
+        const startButton = document.getElementById('start-button');
+        const stopButton = document.getElementById('stop-button');
+        const retryButton = document.getElementById('retry-button');
+
+        const scoreDisplay = document.getElementById('score-display');
+        const finalScoreDisplay = document.getElementById('final-score');
+
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // --- Game State ---
+        let score = 0;
+        let animationFrameId;
+        let gameRunning = false;
+        const mouseEmoji = '🐁'; // Using an emoji for the mouse
+        let mouse = {
+            x: 50,
+            y: 50,
+            size: 40, // Increased size for easier tapping
+            speedX: 2,
+            speedY: 2,
+            dx: (Math.random() < 0.5 ? 1 : -1) * (Math.random() * 2 + 1), // Random initial direction and speed
+            dy: (Math.random() < 0.5 ? 1 : -1) * (Math.random() * 2 + 1)
+        };
+
+        // --- Sound Synthesis (Tone.js) ---
+        let squeakSynth;
+        // It's good practice to start Tone.js audio context on a user gesture
+        async function initAudio() {
+            if (Tone.context.state !== 'running') {
+                await Tone.start();
+                console.log('AudioContext started');
+            }
+            if (!squeakSynth) {
+                squeakSynth = new Tone.Synth({
+                    oscillator: { type: 'sine' },
+                    envelope: {
+                        attack: 0.01,
+                        decay: 0.1,
+                        sustain: 0.1,
+                        release: 0.2,
+                    },
+                }).toDestination();
+            }
+        }
+
+        function playSqueak() {
+            if (squeakSynth && Tone.context.state === 'running') {
+                squeakSynth.triggerAttackRelease('C6', '8n', Tone.now()); // Higher pitch for squeak
+            }
+        }
+
+
+        // --- Screen Management ---
+        function showScreen(screenElement) {
+            introScreen.classList.remove('active');
+            gameScreen.classList.remove('active');
+            scoreScreen.classList.remove('active');
+            screenElement.classList.add('active');
+        }
+
+        // --- Mouse Logic ---
+        function spawnMouse() {
+            mouse.size = 40 + Math.random() * 10; // Slightly variable size
+            mouse.x = Math.random() * (canvas.width - mouse.size);
+            mouse.y = Math.random() * (canvas.height - mouse.size);
+            // Randomize speed and direction
+            const speedMagnitude = 1.5 + Math.random() * 2; // Speed between 1.5 and 3.5
+            const angle = Math.random() * Math.PI * 2; // Random angle
+            mouse.dx = Math.cos(angle) * speedMagnitude;
+            mouse.dy = Math.sin(angle) * speedMagnitude;
+        }
+
+        function drawMouse() {
+            ctx.font = `${mouse.size}px Arial`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            // Add a little "shadow" or outline for better visibility
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            ctx.fillText(mouseEmoji, mouse.x + 2, mouse.y + 2);
+            ctx.fillStyle = 'white'; // Main emoji color (though emojis have their own colors)
+            ctx.fillText(mouseEmoji, mouse.x, mouse.y);
+        }
+
+        function updateMouse() {
+            mouse.x += mouse.dx;
+            mouse.y += mouse.dy;
+
+            // Bounce off walls
+            if (mouse.x - mouse.size / 2 < 0 || mouse.x + mouse.size / 2 > canvas.width) {
+                mouse.dx *= -1;
+                mouse.x = Math.max(mouse.size / 2, Math.min(mouse.x, canvas.width - mouse.size / 2)); // Prevent sticking
+            }
+            if (mouse.y - mouse.size / 2 < 0 || mouse.y + mouse.size / 2 > canvas.height) {
+                mouse.dy *= -1;
+                mouse.y = Math.max(mouse.size / 2, Math.min(mouse.y, canvas.height - mouse.size / 2)); // Prevent sticking
+            }
+        }
+
+        function isMouseTapped(clickX, clickY) {
+            // Check if click is within the bounding box of the mouse emoji
+            // The emoji is drawn centered, so adjust hit box
+            const halfSize = mouse.size / 2;
+            return clickX >= mouse.x - halfSize &&
+                   clickX <= mouse.x + halfSize &&
+                   clickY >= mouse.y - halfSize &&
+                   clickY <= mouse.y + halfSize;
+        }
+
+        // --- Game Loop ---
+        function gameLoop() {
+            if (!gameRunning) return;
+
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw "grass blades" for more texture (optional, can be performance heavy)
+            // for (let i = 0; i < 500; i++) {
+            //     ctx.fillStyle = `rgba(0, ${100 + Math.random() * 50}, 0, 0.5)`; // Darker greens
+            //     ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 2, 5 + Math.random() * 5);
+            // }
+
+
+            updateMouse();
+            drawMouse();
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // --- Game Control Functions ---
+        async function startGame() {
+            await initAudio(); // Ensure audio context is ready
+            score = 0;
+            updateScoreDisplay();
+            gameRunning = true;
+            spawnMouse();
+            showScreen(gameScreen);
+            resizeCanvas(); // Ensure canvas is sized correctly
+            if (animationFrameId) cancelAnimationFrame(animationFrameId); // Clear previous loop
+            gameLoop();
+        }
+
+        function stopGame() {
+            gameRunning = false;
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+            finalScoreDisplay.textContent = `Your score: ${score}`;
+            showScreen(scoreScreen);
+        }
+
+        function updateScoreDisplay() {
+            scoreDisplay.textContent = `Score: ${score}`;
+        }
+
+        // --- Event Handlers ---
+        startButton.addEventListener('click', startGame);
+        stopButton.addEventListener('click', stopGame);
+        retryButton.addEventListener('click', startGame);
+
+        canvas.addEventListener('click', (event) => {
+            if (!gameRunning || Tone.context.state !== 'running') return; // Don't process clicks if game not running or audio not ready
+
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;    // Relationship bitmap vs. element for X
+            const scaleY = canvas.height / rect.height;  // Relationship bitmap vs. element for Y
+
+            const clickX = (event.clientX - rect.left) * scaleX;
+            const clickY = (event.clientY - rect.top) * scaleY;
+
+            if (isMouseTapped(clickX, clickY)) {
+                score++;
+                updateScoreDisplay();
+                playSqueak();
+                spawnMouse(); // Make a new mouse appear
+            }
+        });
+
+        // --- Canvas Resizing ---
+        function resizeCanvas() {
+            const container = document.querySelector('.game-container');
+            const canvasWrapper = document.querySelector('.canvas-wrapper');
+            
+            // Make canvas responsive, fitting its wrapper but not exceeding container or viewport
+            const maxWidth = Math.min(container.clientWidth - 40, 500); // 40px for padding
+            const aspectRatio = 500 / 350; // Original aspect ratio
+
+            canvas.width = maxWidth;
+            canvas.height = maxWidth / aspectRatio;
+
+            // If game is running, redraw mouse in new position or it might be off-canvas
+            if (gameRunning) {
+                // Ensure mouse is within new bounds if it was previously spawned
+                mouse.x = Math.min(mouse.x, canvas.width - mouse.size / 2);
+                mouse.y = Math.min(mouse.y, canvas.height - mouse.size / 2);
+                // No need to call gameLoop() here, it's already running
+            }
+        }
+
+        // --- Initial Setup ---
+        window.addEventListener('resize', () => {
+            if (gameScreen.classList.contains('active')) {
+                resizeCanvas();
+            }
+        });
+        
+        // Set initial screen
+        showScreen(introScreen);
+        // Call resize once on load if game screen were to be default (not in this case)
+        // resizeCanvas(); // Call once to set initial size if game screen was active by default
+                         // For now, it's called when game starts.
+
+    </script>
+</body>
+</html>
